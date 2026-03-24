@@ -1,0 +1,9 @@
+{
+  "name": "Novel AI - المساعد الذكي المتكامل",
+  "description": "Novel AI هو مساعدك الشخصي الذكي للإنتاجية، الدراسة، والبرمجة. يدعم التحدث الصوتي المباشر، تحليل الملفات، وإنشاء الصور.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}

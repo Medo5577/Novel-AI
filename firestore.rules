@@ -1,0 +1,169 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required, immutable) - Firebase Auth UID
+    //   - email: string (required, immutable) - User email
+    //   - displayName: string (optional) - User display name
+    //   - role: string (required, enum: ['user', 'admin']) - User role
+    //   - subscriptionId: string (optional) - Active subscription ID
+    //   - credits: number (optional) - Remaining credits
+    //   - skills: list (optional) - User skills
+    //   - preferences: map (optional) - User preferences
+    //   - memories: list (optional) - User memories
+    //   - createdAt: string (optional, ISO 8601) - Creation timestamp
+    //
+    // Collection: chats
+    // Document ID: {chatId}
+    // Fields:
+    //   - userId: string (required, immutable) - Owner UID
+    //   - title: string (required) - Chat title
+    //   - messages: list (required) - Chat messages
+    //   - updatedAt: timestamp (required) - Last update
+    //   - createdAt: timestamp (required) - Creation time
+    //
+    // Collection: subscriptions
+    // Document ID: {subscriptionId}
+    // Fields:
+    //   - userId: string (required, immutable) - Owner UID
+    //   - planType: string (required, enum: ['Basic', 'Standard', 'Premium', 'Flexible']) - Plan type
+    //   - selectedModels: list (required) - List of model IDs
+    //   - price: number (required) - Monthly price
+    //   - status: string (required, enum: ['active', 'expired', 'pending']) - Status
+    //   - startDate: string (optional, ISO 8601) - Start date
+    //   - endDate: string (optional, ISO 8601) - End date
+    //
+    // Collection: payments
+    // Document ID: {paymentId}
+    // Fields:
+    //   - userId: string (required, immutable) - User UID
+    //   - amount: number (required) - Amount paid
+    //   - receiptUrl: string (required) - URL of receipt
+    //   - status: string (required, enum: ['pending', 'approved', 'rejected']) - Status
+    //   - submittedAt: string (required, immutable) - Submission timestamp
+    //   - verifiedAt: string (optional) - Verification timestamp
+    //   - adminNotes: string (optional) - Admin notes
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin' ||
+          (request.auth.token.email == "abdullahmeme551@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidUrl(url) {
+      return url is string && (url.matches("^https://.*") || url.matches("^http://.*"));
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string && dateStr.matches("^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}.*Z?$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'role', 'subscriptionId', 'credits', 'skills', 'preferences', 'memories', 'createdAt', 'updatedAt']) &&
+             data.uid is string && data.uid.size() > 0 &&
+             data.email is string && isValidEmail(data.email) &&
+             data.role in ['user', 'admin'] &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('credits' in data) || (data.credits is number && data.credits >= 0)) &&
+             (!('skills' in data) || (data.skills is list && data.skills.size() <= 100)) &&
+             (!('preferences' in data) || (data.preferences is map)) &&
+             (!('memories' in data) || (data.memories is list && data.memories.size() <= 100)) &&
+             (!('createdAt' in data) || isValidDateString(data.createdAt));
+    }
+
+    function isValidChat(data) {
+      return hasOnlyAllowedFields(['userId', 'title', 'messages', 'updatedAt', 'createdAt']) &&
+             data.userId is string && data.userId.size() > 0 &&
+             data.title is string && data.title.size() < 200 &&
+             data.messages is list && data.messages.size() <= 500 &&
+             data.updatedAt is timestamp &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidSubscription(data) {
+      return hasOnlyAllowedFields(['userId', 'planType', 'selectedModels', 'price', 'status', 'startDate', 'endDate']) &&
+             data.userId is string && data.userId.size() > 0 &&
+             data.planType in ['Basic', 'Standard', 'Premium', 'Flexible'] &&
+             data.selectedModels is list && data.selectedModels.size() <= 50 &&
+             data.price is number && data.price >= 0 &&
+             data.status in ['active', 'expired', 'pending'] &&
+             (!('startDate' in data) || isValidDateString(data.startDate)) &&
+             (!('endDate' in data) || isValidDateString(data.endDate));
+    }
+
+    function isValidPayment(data) {
+      return hasOnlyAllowedFields(['userId', 'amount', 'receiptUrl', 'status', 'submittedAt', 'verifiedAt', 'adminNotes']) &&
+             data.userId is string && data.userId.size() > 0 &&
+             data.amount is number && data.amount > 0 &&
+             data.receiptUrl is string && isValidUrl(data.receiptUrl) &&
+             data.status in ['pending', 'approved', 'rejected'] &&
+             data.submittedAt is string && isValidDateString(data.submittedAt) &&
+             (!('verifiedAt' in data) || isValidDateString(data.verifiedAt)) &&
+             (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() < 1000));
+    }
+
+    // ===============================================================
+    // Match Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == 'user';
+      allow update: if isAuthenticated() && (
+        (isOwner(userId) && isValidUser(request.resource.data) && request.resource.data.role == resource.data.role && !('credits' in request.resource.data.diff(resource.data).affectedKeys())) ||
+        isAdmin()
+      );
+    }
+
+    match /chats/{chatId} {
+      allow read: if isAuthenticated() && isOwner(resource.data.userId);
+      allow create: if isAuthenticated() && isOwner(request.resource.data.userId) && isValidChat(request.resource.data);
+      allow update: if isAuthenticated() && isOwner(resource.data.userId) && isValidChat(request.resource.data);
+      allow delete: if isAuthenticated() && isOwner(resource.data.userId);
+    }
+
+    match /subscriptions/{subscriptionId} {
+      allow read: if isAuthenticated() && (isOwner(resource.data.userId) || isAdmin());
+      allow create: if isAuthenticated() && isOwner(request.resource.data.userId) && isValidSubscription(request.resource.data);
+      allow update: if isAdmin();
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated() && (isOwner(resource.data.userId) || isAdmin());
+      allow create: if isAuthenticated() && isOwner(request.resource.data.userId) && isValidPayment(request.resource.data) && request.resource.data.status == 'pending';
+      allow update: if isAdmin();
+    }
+  }
+}

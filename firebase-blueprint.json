@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and persona information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "skills": { "type": "array", "items": { "type": "string" } },
+        "preferences": { "type": "object" },
+        "memories": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "content": { "type": "string" },
+              "timestamp": { "type": "number" }
+            }
+          } 
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "A chat session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "title": { "type": "string" },
+        "messages": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "role": { "type": "string", "enum": ["user", "model"] },
+              "parts": { "type": "array" },
+              "timestamp": { "type": "number" },
+              "type": { "type": "string" }
+            }
+          } 
+        },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "userId", "messages", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profile data"
+    },
+    "/chats/{chatId}": {
+      "schema": "Chat",
+      "description": "Chat sessions"
+    }
+  }
+}
