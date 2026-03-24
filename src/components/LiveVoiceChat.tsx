@@ -15,7 +15,7 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
   const [isConnected, setIsConnected] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [transcript, setTranscript] = useState<string[]>([]);
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const sessionRef = useRef<any>(null);
@@ -89,9 +89,6 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
                   audioQueueRef.current.push(int16Data);
                   if (!isPlayingRef.current) playNextChunk();
                 }
-                if (part.text) {
-                  setTranscript(prev => [...prev.slice(-4), `Novel: ${part.text}`]);
-                }
               }
             }
             if (message.serverContent?.interrupted) {
@@ -129,6 +126,15 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
         if (isMuted || !sessionRef.current) return;
         
         const inputData = e.inputBuffer.getChannelData(0);
+        
+        // Simple speech detection
+        let sum = 0;
+        for (let i = 0; i < inputData.length; i++) {
+          sum += Math.abs(inputData[i]);
+        }
+        const average = sum / inputData.length;
+        setIsUserSpeaking(average > 0.01);
+
         const int16Data = new Int16Array(inputData.length);
         for (let i = 0; i < inputData.length; i++) {
           int16Data[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
@@ -164,6 +170,7 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
     setIsConnected(false);
     setIsConnecting(false);
     setIsSpeaking(false);
+    setIsUserSpeaking(false);
     audioQueueRef.current = [];
     isPlayingRef.current = false;
   };
@@ -241,20 +248,29 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
             </h2>
             
             <p className="text-zinc-400 mb-12 max-w-xs">
-              {error || (isConnected ? "تحدث الآن، Novel جاهزة للمساعدة بصوتها الذكي." : "تأكد من اتصالك بالإنترنت وصلاحيات الميكروفون.")}
+              {error || (isConnected ? "Novel تستمع إليك الآن..." : "تأكد من اتصالك بالإنترنت وصلاحيات الميكروفون.")}
             </p>
 
-            {/* Transcript Preview */}
-            <div className="w-full space-y-2 mb-12 min-h-[80px]">
-              {transcript.map((t, i) => (
-                <motion.p 
-                  initial={{ opacity: 0, y: 5 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  key={i} 
-                  className="text-sm text-zinc-500 italic"
-                >
-                  {t}
-                </motion.p>
+            {/* Enhanced Sound Wave Visualization */}
+            <div className="flex items-end justify-center gap-1.5 h-16 mb-12">
+              {[...Array(12)].map((_, i) => (
+                <motion.div
+                  key={i}
+                  animate={{
+                    height: (isSpeaking || isUserSpeaking) ? [12, Math.random() * 40 + 20, 12] : 8,
+                    opacity: (isSpeaking || isUserSpeaking) ? [0.4, 1, 0.4] : 0.2
+                  }}
+                  transition={{
+                    duration: 0.6,
+                    repeat: Infinity,
+                    delay: i * 0.05,
+                    ease: "easeInOut"
+                  }}
+                  className={cn(
+                    "w-1.5 rounded-full transition-colors duration-500",
+                    isSpeaking ? "bg-emerald-500" : isUserSpeaking ? "bg-blue-500" : "bg-zinc-700"
+                  )}
+                />
               ))}
             </div>
 

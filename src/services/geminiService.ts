@@ -31,6 +31,7 @@ export interface Message {
   isGroundingUsed?: boolean;
   groundingUrls?: string[];
   artifacts?: Artifact[];
+  usedMemories?: string[];
 }
 
 export const ARTIFACT_PROMPT = `
@@ -101,6 +102,48 @@ export function parseArtifacts(text: string): { cleanText: string; artifacts: Ar
   }
   
   return { cleanText: cleanText.trim(), artifacts };
+}
+
+export async function generateChatSummary(messages: Message[], language: 'ar' | 'en'): Promise<string> {
+  const ai = getGemini();
+  const chatHistory = messages.map(m => `${m.role}: ${m.parts[0].text}`).join('\n').substring(0, 2000);
+  const prompt = `Summarize the following chat conversation in one short sentence (max 10 words). 
+  Conversation:
+  ${chatHistory}
+  Language: ${language === 'ar' ? 'Arabic' : 'English'}`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt
+    });
+    return response.text.trim();
+  } catch (e) {
+    console.error("Failed to generate summary:", e);
+    return "";
+  }
+}
+
+export async function generateContextualSuggestions(lastMessage: string, language: 'ar' | 'en'): Promise<string[]> {
+  const ai = getGemini();
+  const prompt = `Based on the following AI response, suggest 3 short (max 4 words) follow-up actions or questions for the user. 
+  Response: "${lastMessage.substring(0, 500)}"
+  Language: ${language === 'ar' ? 'Arabic' : 'English'}
+  Return ONLY a JSON array of strings.`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+      config: { 
+        responseMimeType: "application/json"
+      }
+    });
+    return JSON.parse(response.text);
+  } catch (e) {
+    console.error("Failed to generate suggestions:", e);
+    return language === 'ar' ? ["لخص هذا", "اشرح أكثر", "ترجم للإنجليزية"] : ["Summarize", "Explain more", "Translate to Arabic"];
+  }
 }
 
 export async function* streamChat(

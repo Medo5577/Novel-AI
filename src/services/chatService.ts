@@ -69,18 +69,20 @@ export interface ChatSession {
   id: string;
   userId: string;
   title: string;
+  summary?: string;
   messages: Message[];
   updatedAt: any;
 }
 
-export const saveChat = async (userId: string, messages: Message[], chatId?: string, title?: string): Promise<string> => {
+export const saveChat = async (userId: string, messages: Message[], chatId?: string, title?: string, summary?: string): Promise<string> => {
   if (chatId) {
     const chatRef = doc(db, 'chats', chatId);
     try {
       await updateDoc(chatRef, {
         messages,
         updatedAt: serverTimestamp(),
-        title: title || messages[0]?.parts[0].text?.slice(0, 30) || 'Untitled Chat'
+        title: title || messages[0]?.parts[0].text?.slice(0, 30) || 'Untitled Chat',
+        summary: summary || ''
       });
       return chatId;
     } catch (error) {
@@ -94,6 +96,7 @@ export const saveChat = async (userId: string, messages: Message[], chatId?: str
         userId,
         messages,
         title: title || messages[0]?.parts[0].text?.slice(0, 30) || 'Untitled Chat',
+        summary: summary || '',
         updatedAt: serverTimestamp(),
         createdAt: serverTimestamp()
       });

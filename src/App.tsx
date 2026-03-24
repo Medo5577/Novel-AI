@@ -48,7 +48,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { motion, AnimatePresence } from 'motion/react';
-import { streamChat, generateImage, textToSpeech, analyzeConversation, Message, AppMode, parseArtifacts, MODE_PROMPTS } from './services/geminiService';
+import { streamChat, generateImage, textToSpeech, analyzeConversation, Message, AppMode, parseArtifacts, MODE_PROMPTS, generateContextualSuggestions, generateChatSummary } from './services/geminiService';
 import { cn } from './utils';
 import { InteractiveTable } from './components/InteractiveTable';
 import { CVStudio } from './components/CVStudio';
@@ -112,7 +112,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 function NovelApp() {
   const [showLanding, setShowLanding] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
-  const [history, setHistory] = useState<{ id: string; title: string; messages: Message[] }[]>([]);
+  const [history, setHistory] = useState<{ id: string; title: string; summary?: string; messages: Message[] }[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -307,7 +307,7 @@ function NovelApp() {
         setUserProfile(profile);
 
         const userChats = await getUserChats(user.uid);
-        setHistory(userChats.map(c => ({ id: c.id, title: c.title, messages: c.messages })));
+        setHistory(userChats.map(c => ({ id: c.id, title: c.title, summary: c.summary, messages: c.messages })));
         
         const sub = await getUserSubscription();
         setSubscription(sub);
@@ -363,9 +363,11 @@ function NovelApp() {
   };
 
   const [activeTab, setActiveTab] = useState<'chat' | 'scheduler' | 'history' | 'memory' | 'embeddings'>('chat');
+  const [contextualSuggestions, setContextualSuggestions] = useState<string[]>([]);
   const [tasks, setTasks] = useState<any[]>([]);
   const [taskLogs, setTaskLogs] = useState<any[]>([]);
   const [isLiveVoiceOpen, setIsLiveVoiceOpen] = useState(false);
+  const [typingSoundEnabled, setTypingSoundEnabled] = useState(true);
   const [showPersonaBuilder, setShowPersonaBuilder] = useState(false);
   const [customPersona, setCustomPersona] = useState<any>(null);
   const [newTask, setNewTask] = useState({ task: '', time: '' });
@@ -373,12 +375,26 @@ function NovelApp() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const typingAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, activeTab]);
+
+  useEffect(() => {
+    if (typingSoundEnabled && isTyping && messages[messages.length - 1]?.role === 'model') {
+      if (!typingAudioRef.current) {
+        typingAudioRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/2358/2358-preview.mp3');
+        typingAudioRef.current.loop = true;
+        typingAudioRef.current.volume = 0.1;
+      }
+      typingAudioRef.current.play().catch(() => {});
+    } else {
+      typingAudioRef.current?.pause();
+    }
+  }, [isTyping, typingSoundEnabled, messages]);
 
   useEffect(() => {
     fetchTasks();
@@ -407,11 +423,16 @@ function NovelApp() {
   const saveToHistory = async (msgs: Message[]) => {
     if (msgs.length === 0 || !user) return;
     
-    const chatId = await saveChat(user.uid, msgs, currentChatId || undefined);
+    let summary = "";
+    if (msgs.length >= 2) {
+      summary = await generateChatSummary(msgs, language);
+    }
+    
+    const chatId = await saveChat(user.uid, msgs, currentChatId || undefined, undefined, summary);
     if (!currentChatId) setCurrentChatId(chatId);
     
     const userChats = await getUserChats(user.uid);
-    setHistory(userChats.map(c => ({ id: c.id, title: c.title, messages: c.messages })));
+    setHistory(userChats.map(c => ({ id: c.id, title: c.title, summary: c.summary, messages: c.messages })));
   };
 
   const loadHistory = (h: any) => {
@@ -507,8 +528,26 @@ function NovelApp() {
     setInput('');
     setAttachment(null);
     setIsTyping(true);
+    setContextualSuggestions([]);
+
+    // Smart Mode Logic
+    let currentMode = mode;
+    if (mode === 'General') {
+      const studyKeywords = /study|learn|explain|exam|homework|درس|تعلم|شرح|امتحان|واجب/i;
+      const professionalKeywords = /work|job|cv|resume|interview|business|عمل|وظيفة|سيرة ذاتية|مقابلة|بزنس/i;
+      const dataKeywords = /data|analyze|chart|table|excel|csv|بيانات|تحليل|رسم بياني|جدول/i;
+
+      if (studyKeywords.test(input)) currentMode = 'Study';
+      else if (professionalKeywords.test(input)) currentMode = 'Professional';
+      else if (dataKeywords.test(input)) currentMode = 'Data';
+      
+      if (currentMode !== mode) {
+        setMode(currentMode);
+      }
+    }
 
     const isImageRequest = /generate image|create image|draw|صورة|ارسم/i.test(input);
+    let fullResponse = '';
 
     try {
       if (isImageRequest) {
@@ -521,7 +560,6 @@ function NovelApp() {
         };
         setMessages(prev => [...prev, modelMessage]);
       } else {
-        let fullResponse = '';
         const modelMessage: Message = {
           role: 'model',
           parts: [{ text: '' }],
@@ -629,6 +667,9 @@ function NovelApp() {
       }]);
     } finally {
       setIsTyping(false);
+      if (fullResponse) {
+        generateContextualSuggestions(fullResponse, language).then(setContextualSuggestions);
+      }
     }
   };
 
@@ -928,6 +969,28 @@ function NovelApp() {
             </div>
           </div>
           <div className="hidden md:flex items-center gap-4">
+            {subscription?.status === 'active' && (
+              <div className="flex items-center gap-1 p-1 bg-zinc-900/50 rounded-xl border border-white/5">
+                <button
+                  onClick={() => setSelectedFreeModel("gemini")}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
+                    selectedFreeModel === "gemini" ? "bg-emerald-500 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
+                  )}
+                >
+                  Gemini
+                </button>
+                <button
+                  onClick={() => setSelectedFreeModel("openrouter/free")}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
+                    selectedFreeModel === "openrouter/free" ? "bg-blue-500 text-white shadow-lg" : "text-zinc-500 hover:text-zinc-300"
+                  )}
+                >
+                  OpenRouter
+                </button>
+              </div>
+            )}
             <button
               onClick={() => setShowSubscription(true)}
               className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-800 text-zinc-300 hover:bg-zinc-700 transition-all border border-white/5 font-bold text-sm"
@@ -1203,7 +1266,8 @@ function NovelApp() {
                         <FileText className="w-4 h-4 text-blue-400" />
                         <div>
                           <p className="text-sm font-medium text-white">{h.title || t.untitled}</p>
-                          <p className="text-[10px] text-zinc-500">{new Date(h.id).toLocaleDateString(language === 'ar' ? 'ar-EG' : 'en-US')}</p>
+                          {h.summary && <p className="text-[11px] text-zinc-400 mt-0.5 line-clamp-1 italic">"{h.summary}"</p>}
+                          <p className="text-[10px] text-zinc-500 mt-1">{new Date(h.id).toLocaleDateString(language === 'ar' ? 'ar-EG' : 'en-US')}</p>
                         </div>
                       </div>
                       <ArrowRight className={cn("w-4 h-4 text-zinc-600", language === 'ar' && "rotate-180")} />
@@ -1273,6 +1337,14 @@ function NovelApp() {
                         : "glass-panel text-zinc-200 rounded-tl-none border border-white/5",
                       isTyping && idx === messages.length - 1 && msg.role === 'model' && "animate-pulse"
                     )}>
+                      {msg.usedMemories && msg.usedMemories.length > 0 && (
+                        <div className="flex items-center gap-1.5 mb-3 px-2 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/20 w-fit">
+                          <Brain className="w-3 h-3 text-emerald-400" />
+                          <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-widest">
+                            {language === 'ar' ? 'تم استخدام الذاكرة' : 'Memory Applied'}
+                          </span>
+                        </div>
+                      )}
                       {msg.parts.map((part, pIdx) => (
                         <div key={pIdx}>
                           {part.text ? (
@@ -1462,6 +1534,27 @@ function NovelApp() {
         <div className="p-4 md:p-6 bg-zinc-950/50 backdrop-blur-xl border-t border-white/5">
           <div className="max-w-4xl mx-auto relative">
             <AnimatePresence>
+              {contextualSuggestions.length > 0 && !isTyping && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 10 }}
+                  className="absolute bottom-full left-0 mb-4 flex flex-wrap gap-2"
+                >
+                  {contextualSuggestions.map((suggestion, sIdx) => (
+                    <button
+                      key={sIdx}
+                      onClick={() => {
+                        setInput(suggestion);
+                        setContextualSuggestions([]);
+                      }}
+                      className="px-3 py-1.5 glass-panel rounded-full text-xs text-emerald-400 hover:text-white hover:bg-emerald-500/20 border border-emerald-500/30 transition-all whitespace-nowrap shadow-lg"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </motion.div>
+              )}
               {attachment && (
                 <motion.div
                   initial={{ opacity: 0, y: 10 }}
@@ -1615,6 +1708,34 @@ function NovelApp() {
                     </div>
                   </div>
 
+                  {/* Typing Sound Toggle */}
+                  <div className="space-y-3">
+                    <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest px-1">
+                      {language === 'ar' ? 'صوت الكتابة' : 'Typing Sound'}
+                    </label>
+                    <button
+                      onClick={() => setTypingSoundEnabled(!typingSoundEnabled)}
+                      className={cn(
+                        "w-full flex items-center justify-between p-4 rounded-2xl border transition-all font-medium",
+                        typingSoundEnabled ? "bg-emerald-500/10 border-emerald-500/50 text-emerald-400" : "bg-white/5 border-white/5 text-zinc-400 hover:bg-white/10"
+                      )}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Volume2 className="w-5 h-5" />
+                        <span>{language === 'ar' ? 'تفعيل صوت الكتابة' : 'Enable Typing Sound'}</span>
+                      </div>
+                      <div className={cn(
+                        "w-10 h-5 rounded-full relative transition-all",
+                        typingSoundEnabled ? "bg-emerald-500" : "bg-zinc-700"
+                      )}>
+                        <div className={cn(
+                          "absolute top-1 w-3 h-3 bg-white rounded-full transition-all",
+                          typingSoundEnabled ? "right-1" : "left-1"
+                        )} />
+                      </div>
+                    </button>
+                  </div>
+
                   {/* Actions */}
                   <div className="space-y-2">
                     <button
@@ -1644,6 +1765,17 @@ function NovelApp() {
             </div>
           )}
         </AnimatePresence>
+
+        <button
+          onClick={() => setIsLiveVoiceOpen(true)}
+          className="fixed bottom-24 right-6 p-4 bg-emerald-500 text-white rounded-full shadow-2xl hover:bg-emerald-400 hover:scale-110 transition-all z-40 group"
+          title="Voice Mode"
+        >
+          <Mic className="w-6 h-6" />
+          <span className="absolute right-full mr-3 px-2 py-1 bg-zinc-900 text-white text-[10px] rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+            {language === 'ar' ? 'الوضع الصوتي المباشر' : 'Live Voice Mode'}
+          </span>
+        </button>
       </main>
     </div>
   );
