@@ -1,16 +1,25 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Sparkles, Zap, Palette, Code, Shield, ArrowRight, Globe, BarChart3, FileText, GraduationCap, Briefcase } from 'lucide-react';
+import { Sparkles, Zap, Palette, Code, Shield, ArrowRight, Globe, BarChart3, FileText, GraduationCap, Briefcase, Mail, Lock, User as UserIcon } from 'lucide-react';
 import { cn } from '../utils';
 
 interface LandingPageProps {
   onStart: () => void;
   onLogin: () => void;
+  onEmailLogin: (email: string, pass: string) => Promise<void>;
+  onEmailRegister: (email: string, pass: string) => Promise<void>;
   language: 'ar' | 'en';
   isLoggedIn: boolean;
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onLogin, language, isLoggedIn }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onLogin, onEmailLogin, onEmailRegister, language, isLoggedIn }) => {
+  const [showEmailForm, setShowEmailForm] = React.useState(false);
+  const [isRegistering, setIsRegistering] = React.useState(false);
+  const [email, setEmail] = React.useState('');
+  const [password, setPassword] = React.useState('');
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState('');
+
   const t = {
     ar: {
       capabilities: "القدرات",
@@ -21,6 +30,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onLogin, lang
       heroDesc: "استكشف قوة Novel AI، وكيل الذكاء الاصطناعي المتقدم الذي يمكنه التفكير والتحليل والإبداع مثل البشر. احصل على حلول ذكية لجميع احتياجاتك من البحث في الإنترنت إلى توليد الصور وكتابة الأكواد.",
       startFree: "ابدأ الآن مجانًا",
       loginGoogle: "تسجيل الدخول بجوجل",
+      loginEmail: "تسجيل الدخول بالبريد",
+      email: "البريد الإلكتروني",
+      password: "كلمة المرور",
+      submitLogin: "دخول",
+      submitRegister: "إنشاء حساب",
+      toggleRegister: "ليس لديك حساب؟ سجل الآن",
+      toggleLogin: "لديك حساب بالفعل؟ سجل دخولك",
       discover: "اكتشف القدرات",
       featuresTitle: "عالم من الإمكانيات بين يديك",
       featuresDesc: "Novel AI ليس مجرد مساعد، بل هو شريكك الإبداعي والتحليلي المتكامل.",
@@ -61,6 +77,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onLogin, lang
       heroDesc: "Explore the power of Novel AI, an advanced AI agent that can think, analyze, and create like a human. Get smart solutions for all your needs from web search to image generation and coding.",
       startFree: "Start Now for Free",
       loginGoogle: "Login with Google",
+      loginEmail: "Login with Email",
+      email: "Email Address",
+      password: "Password",
+      submitLogin: "Login",
+      submitRegister: "Register",
+      toggleRegister: "Don't have an account? Register",
+      toggleLogin: "Already have an account? Login",
       discover: "Discover Capabilities",
       featuresTitle: "A World of Possibilities",
       featuresDesc: "Novel AI is not just an assistant, it's your integrated creative and analytical partner.",
@@ -166,14 +189,100 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onLogin, lang
               >
                 {t.startFree} <ArrowRight className={cn("w-5 h-5", language === 'ar' && "rotate-180")} />
               </button>
-              {!isLoggedIn && (
-                <button 
-                  onClick={onLogin}
-                  className="w-full sm:w-auto px-10 py-5 bg-white/5 border border-white/10 text-white rounded-2xl font-bold text-lg hover:bg-white/10 transition-all flex items-center justify-center gap-2"
-                >
-                  {t.loginGoogle}
-                </button>
-              )}
+            {!isLoggedIn && (
+              <div className="flex flex-col gap-4 w-full max-w-sm">
+                {!showEmailForm ? (
+                  <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                    <button 
+                      onClick={onLogin}
+                      className="w-full sm:w-auto px-10 py-5 bg-white/5 border border-white/10 text-white rounded-2xl font-bold text-lg hover:bg-white/10 transition-all flex items-center justify-center gap-2"
+                    >
+                      {t.loginGoogle}
+                    </button>
+                    <button 
+                      onClick={() => setShowEmailForm(true)}
+                      className="w-full sm:w-auto px-10 py-5 bg-white/5 border border-white/10 text-white rounded-2xl font-bold text-lg hover:bg-white/10 transition-all flex items-center justify-center gap-2"
+                    >
+                      <Mail className="w-5 h-5" /> {t.loginEmail}
+                    </button>
+                  </div>
+                ) : (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="bg-white/5 border border-white/10 p-8 rounded-3xl w-full"
+                  >
+                    <h3 className="text-xl font-bold text-white mb-6 text-center">
+                      {isRegistering ? t.submitRegister : t.submitLogin}
+                    </h3>
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm text-zinc-400 mb-1.5">{t.email}</label>
+                        <div className="relative">
+                          <Mail className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
+                          <input 
+                            type="email" 
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="w-full bg-black/40 border border-white/10 rounded-xl py-3 pl-12 pr-4 text-white focus:border-emerald-500 transition-colors outline-none"
+                            placeholder="name@example.com"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm text-zinc-400 mb-1.5">{t.password}</label>
+                        <div className="relative">
+                          <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-zinc-500" />
+                          <input 
+                            type="password" 
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className="w-full bg-black/40 border border-white/10 rounded-xl py-3 pl-12 pr-4 text-white focus:border-emerald-500 transition-colors outline-none"
+                            placeholder="••••••••"
+                          />
+                        </div>
+                      </div>
+                      {error && <p className="text-red-400 text-xs text-center">{error}</p>}
+                      <button 
+                        disabled={loading}
+                        onClick={async () => {
+                          setLoading(true);
+                          setError('');
+                          try {
+                            if (isRegistering) {
+                              await onEmailRegister(email, password);
+                            } else {
+                              await onEmailLogin(email, password);
+                            }
+                          } catch (err: any) {
+                            setError(err.message);
+                          } finally {
+                            setLoading(false);
+                          }
+                        }}
+                        className="w-full py-4 bg-emerald-500 text-white rounded-xl font-bold hover:bg-emerald-400 transition-all disabled:opacity-50"
+                      >
+                        {loading ? '...' : (isRegistering ? t.submitRegister : t.submitLogin)}
+                      </button>
+                      <div className="flex flex-col gap-2 pt-2">
+                        <button 
+                          onClick={() => setIsRegistering(!isRegistering)}
+                          className="text-sm text-zinc-400 hover:text-white transition-colors text-center"
+                        >
+                          {isRegistering ? t.toggleLogin : t.toggleRegister}
+                        </button>
+                        <button 
+                          onClick={() => setShowEmailForm(false)}
+                          className="text-sm text-zinc-500 hover:text-white transition-colors text-center"
+                        >
+                          {language === 'ar' ? 'رجوع' : 'Back'}
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </div>
+            )}
               <a 
                 href="#features"
                 className="w-full sm:w-auto px-10 py-5 bg-white/5 border border-white/10 text-white rounded-2xl font-bold text-lg hover:bg-white/10 transition-all"

@@ -64,8 +64,8 @@ import { PersonaBuilder } from './components/PersonaBuilder';
 import { getUserSubscription, Subscription } from './services/subscriptionService';
 import { streamOpenRouterWithFailover, FREE_MODELS, clearBlacklist } from './services/openRouterService';
 import { auth } from './services/firebase';
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { doc, setDoc, getDoc, getDocFromServer } from 'firebase/firestore';
 import { db } from './services/firebase';
 import { getUserProfile, saveUserProfile, addMemory, addSkill, updatePreference, UserProfile } from './services/userService';
 import { saveChat, getUserChats, deleteChat, ChatSession } from './services/chatService';
@@ -274,6 +274,19 @@ function NovelApp() {
       setUser(user);
       if (user) {
         setShowLanding(false);
+
+        // Test connection
+        const testConnection = async () => {
+          try {
+            await getDocFromServer(doc(db, 'users', user.uid));
+          } catch (error) {
+            if (error instanceof Error && error.message.includes('the client is offline')) {
+              console.error("Please check your Firebase configuration. The client is offline.");
+            }
+          }
+        };
+        testConnection();
+
         // Ensure user exists in Firestore
         const userRef = doc(db, 'users', user.uid);
         const userDoc = await getDoc(userRef);
@@ -314,6 +327,14 @@ function NovelApp() {
     } catch (error) {
       console.error("Login failed:", error);
     }
+  };
+
+  const handleEmailLogin = async (email: string, pass: string) => {
+    await signInWithEmailAndPassword(auth, email, pass);
+  };
+
+  const handleEmailRegister = async (email: string, pass: string) => {
+    await createUserWithEmailAndPassword(auth, email, pass);
   };
 
   const handleResetBlacklist = async () => {
@@ -435,6 +456,8 @@ function NovelApp() {
       <LandingPage 
         onStart={() => setShowLanding(false)} 
         onLogin={handleLogin}
+        onEmailLogin={handleEmailLogin}
+        onEmailRegister={handleEmailRegister}
         language={language} 
         isLoggedIn={!!user}
       />
@@ -511,7 +534,7 @@ function NovelApp() {
         const useOpenRouter = (subscription && subscription.status === 'active' && subscription.selectedModels.length > 0) || !subscription;
         
         if (useOpenRouter) {
-          const profileContext = userProfile ? `\n\nUser Context:\n- Name: ${userProfile.name || 'Unknown'}\n- Skills: ${userProfile.skills.join(', ') || 'None'}\n- Memories: ${userProfile.memories.slice(-5).map(m => m.content).join('; ') || 'None'}` : '';
+          const profileContext = userProfile ? `\n\nUser Context:\n- Name: ${userProfile.displayName || 'Unknown'}\n- Skills: ${userProfile.skills.join(', ') || 'None'}\n- Memories: ${userProfile.memories.slice(-5).map(m => m.content).join('; ') || 'None'}` : '';
           const systemPrompt = MODE_PROMPTS[mode] + profileContext;
           const openRouterMessages = [
             { role: "system", content: systemPrompt },
@@ -555,7 +578,7 @@ function NovelApp() {
           }
         } else {
           // This branch is only reached if there's a subscription but no models selected (unlikely)
-          const profileContext = userProfile ? `\n\nUser Context:\n- Name: ${userProfile.name || 'Unknown'}\n- Skills: ${userProfile.skills.join(', ') || 'None'}\n- Memories: ${userProfile.memories.slice(-5).map(m => m.content).join('; ') || 'None'}` : '';
+          const profileContext = userProfile ? `\n\nUser Context:\n- Name: ${userProfile.displayName || 'Unknown'}\n- Skills: ${userProfile.skills.join(', ') || 'None'}\n- Memories: ${userProfile.memories.slice(-5).map(m => m.content).join('; ') || 'None'}` : '';
           const systemPrompt = MODE_PROMPTS[mode] + profileContext;
           const stream = streamChat([...messages, userMessage], {
             mode,
@@ -1247,12 +1270,18 @@ function NovelApp() {
                       "p-3 md:p-4 rounded-xl md:rounded-2xl text-sm leading-relaxed shadow-sm relative group w-full",
                       msg.role === 'user' 
                         ? "bg-emerald-600 text-white rounded-tr-none" 
-                        : "glass-panel text-zinc-200 rounded-tl-none border border-white/5"
+                        : "glass-panel text-zinc-200 rounded-tl-none border border-white/5",
+                      isTyping && idx === messages.length - 1 && msg.role === 'model' && "animate-pulse"
                     )}>
                       {msg.parts.map((part, pIdx) => (
                         <div key={pIdx}>
-                          {part.text && (
-                            <div className="markdown-body">
+                          {part.text ? (
+                            <motion.div 
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
+                              transition={{ duration: 0.5 }}
+                              className="markdown-body"
+                            >
                               <ReactMarkdown
                                 remarkPlugins={[remarkMath]}
                                 rehypePlugins={[rehypeKatex]}
@@ -1279,31 +1308,21 @@ function NovelApp() {
                               >
                                 {part.text}
                               </ReactMarkdown>
+                            </motion.div>
+                          ) : msg.role === 'model' && isTyping && (
+                            <div className="space-y-2 py-2">
+                              <div className="h-4 w-3/4 bg-white/5 rounded animate-pulse" />
+                              <div className="h-4 w-1/2 bg-white/5 rounded animate-pulse" />
+                              <div className="h-4 w-2/3 bg-white/5 rounded animate-pulse" />
                             </div>
                           )}
                           
-                          {msg.artifacts && msg.artifacts.length > 0 && (
-                            <div className="space-y-4 mt-4">
-                              {msg.artifacts.map((artifact, aIdx) => (
-                                <div key={aIdx}>
-                                  {artifact.type === 'table' && artifact.data?.initialData && <InteractiveTable initialData={artifact.data.initialData} />}
-                                  {artifact.type === 'cv' && artifact.data && <CVStudio initialData={artifact.data} />}
-                                  {artifact.type === 'quiz' && artifact.data && (
-                                    <QuizBlock 
-                                      title={artifact.data.title} 
-                                      questions={artifact.data.questions} 
-                                      timePerQuestion={artifact.data.timePerQuestion}
-                                      maxLives={artifact.data.maxLives}
-                                    />
-                                  )}
-                                  {artifact.type === 'chart' && artifact.data && <ChartBlock type={artifact.data.type} data={artifact.data.data} title={artifact.data.title} config={artifact.data.config} />}
-                                  {artifact.type === 'web' && artifact.data && <CodeSandbox html={artifact.data.html} css={artifact.data.css} js={artifact.data.js} title={artifact.data.title} />}
-                                </div>
-                              ))}
-                            </div>
-                          )}
                           {part.inlineData && (
-                            <div className="mt-4 rounded-xl overflow-hidden border border-white/10 shadow-2xl">
+                            <motion.div 
+                              initial={{ opacity: 0, scale: 0.9 }}
+                              animate={{ opacity: 1, scale: 1 }}
+                              className="mt-4 rounded-xl overflow-hidden border border-white/10 shadow-2xl"
+                            >
                               {part.inlineData.mimeType.startsWith('image/') ? (
                                 <img 
                                   src={`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`} 
@@ -1317,21 +1336,48 @@ function NovelApp() {
                                   <span className="text-xs text-zinc-300">{t.documentAttached}</span>
                                 </div>
                               )}
-                              {msg.type === 'image' && (
-                                <div className="p-3 bg-zinc-900 border-t border-white/5 flex justify-end">
-                                  <a 
-                                    href={`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`}
-                                    download="nova-generated.png"
-                                    className="p-2 hover:bg-white/5 rounded-lg text-zinc-400 hover:text-white transition-colors"
-                                  >
-                                    <Download className="w-4 h-4" />
-                                  </a>
-                                </div>
-                              )}
-                            </div>
+                            </motion.div>
                           )}
                         </div>
                       ))}
+
+                      {msg.artifacts && msg.artifacts.length > 0 && (
+                        <motion.div 
+                          initial={{ opacity: 0, y: 20 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          className="space-y-4 mt-4"
+                        >
+                          {msg.artifacts.map((artifact, aIdx) => (
+                            <div key={aIdx}>
+                              {artifact.type === 'table' && artifact.data?.initialData && <InteractiveTable initialData={artifact.data.initialData} />}
+                              {artifact.type === 'cv' && artifact.data && <CVStudio initialData={artifact.data} />}
+                              {artifact.type === 'quiz' && artifact.data && (
+                                <QuizBlock 
+                                  title={artifact.data.title} 
+                                  questions={artifact.data.questions} 
+                                  timePerQuestion={artifact.data.timePerQuestion}
+                                  maxLives={artifact.data.maxLives}
+                                />
+                              )}
+                              {artifact.type === 'chart' && artifact.data && <ChartBlock type={artifact.data.type} data={artifact.data.data} title={artifact.data.title} config={artifact.data.config} />}
+                              {artifact.type === 'web' && artifact.data && <CodeSandbox html={artifact.data.html} css={artifact.data.css} js={artifact.data.js} title={artifact.data.title} />}
+                            </div>
+                          ))}
+                        </motion.div>
+                      )}
+
+                      {msg.type === 'image' && msg.parts.some(p => p.inlineData) && (
+                        <div className="p-3 bg-zinc-900/50 border-t border-white/5 flex justify-end mt-4 rounded-b-xl">
+                          <a 
+                            href={`data:${msg.parts.find(p => p.inlineData)?.inlineData?.mimeType};base64,${msg.parts.find(p => p.inlineData)?.inlineData?.data}`}
+                            download="nova-generated.png"
+                            className="p-2 hover:bg-white/5 rounded-lg text-zinc-400 hover:text-white transition-colors flex items-center gap-2 text-xs"
+                          >
+                            <Download className="w-4 h-4" />
+                            {language === 'ar' ? 'تحميل الصورة' : 'Download Image'}
+                          </a>
+                        </div>
+                      )}
                       
                       {msg.role === 'model' && msg.parts[0].text && (
                         <button
@@ -1369,17 +1415,44 @@ function NovelApp() {
                   </div>
                 </motion.div>
               ))}
-              {isTyping && (
-                <div className="flex gap-4">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center">
+              {isTyping && messages[messages.length - 1]?.role !== 'model' && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="flex gap-4"
+                >
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center shrink-0">
                     <Loader2 className="w-5 h-5 text-emerald-500 animate-spin" />
                   </div>
-                  <div className="glass-panel p-4 rounded-2xl rounded-tl-none flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
-                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
-                    <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce" />
+                  <div className="glass-panel p-4 rounded-2xl rounded-tl-none border border-white/5 flex flex-col gap-3 min-w-[200px]">
+                    <div className="flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                      <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                      <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-bounce" />
+                      <span className="text-[10px] text-emerald-500 font-bold uppercase tracking-widest ml-2">
+                        {language === 'ar' ? 'جاري التفكير...' : 'Thinking...'}
+                      </span>
+                    </div>
+                    <div className="space-y-2">
+                      <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden">
+                        <motion.div 
+                          initial={{ x: '-100%' }}
+                          animate={{ x: '100%' }}
+                          transition={{ repeat: Infinity, duration: 1.5, ease: "linear" }}
+                          className="h-full w-1/2 bg-gradient-to-r from-transparent via-emerald-500/20 to-transparent"
+                        />
+                      </div>
+                      <div className="h-2 w-2/3 bg-white/5 rounded-full overflow-hidden">
+                        <motion.div 
+                          initial={{ x: '-100%' }}
+                          animate={{ x: '100%' }}
+                          transition={{ repeat: Infinity, duration: 1.5, ease: "linear", delay: 0.5 }}
+                          className="h-full w-1/2 bg-gradient-to-r from-transparent via-emerald-500/20 to-transparent"
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
+                </motion.div>
               )}
             </div>
           )}
@@ -1465,9 +1538,6 @@ function NovelApp() {
                 <Send className="w-4 h-4 md:w-5 md:h-5" />
               </button>
             </form>
-            <p className="text-center text-[10px] text-zinc-600 mt-4 uppercase tracking-[0.2em] font-medium">
-              Deep Reasoning • Study Mode • Professional Tools • Scheduled Agent
-            </p>
           </div>
         </div>
         <AnimatePresence>
