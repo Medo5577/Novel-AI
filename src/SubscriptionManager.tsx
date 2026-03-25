@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { FIXED_PLANS, Plan, createSubscription, submitPayment, getUserSubscription, Subscription } from '../services/subscriptionService';
-import { getModels, OpenRouterModel } from '../services/openRouterService';
+import { FIXED_PLANS, Plan, createSubscription, submitPayment, getUserSubscription, Subscription } from './subscriptionService';
+import { getModels, OpenRouterModel } from './openRouterService';
 import { motion, AnimatePresence } from 'motion/react';
 import { Check, CreditCard, Shield, Zap, Info, Upload, AlertCircle, X } from 'lucide-react';
-import { auth } from '../services/firebase';
+import { auth } from './firebase';
 
 export const SubscriptionManager: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const [activeTab, setActiveTab] = useState<'plans' | 'models' | 'payment'>('plans');

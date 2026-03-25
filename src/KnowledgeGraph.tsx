@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
-import { UserProfile } from '../services/userService';
+import { UserProfile } from './userService';
 import { RefreshCw } from 'lucide-react';
 
 interface KnowledgeGraphProps {

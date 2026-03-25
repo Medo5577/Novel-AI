@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { CheckCircle2, XCircle, HelpCircle, ArrowRight, RotateCcw, Timer, Trophy, Zap, AlertCircle, Heart, HeartOff, Info, ListChecks } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { cn } from '../utils';
+import { cn } from './utils';
 
 interface Question {
   id: number;

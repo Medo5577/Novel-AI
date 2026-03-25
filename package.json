@@ -1,8 +1,8 @@
 {
-  "name": "novel-ai",
-  "version": "1.0.0",
-  "description": "A novel AI project.",
-  "main": "index.js",
+  "name": "react-example",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build",
@@ -11,8 +11,6 @@
     "lint": "tsc --noEmit",
     "start": "node server.ts"
   },
-  "author": "Medo5577",
-  "license": "ISC",
   "dependencies": {
     "@google/genai": "^1.29.0",
     "@openrouter/sdk": "^0.9.11",
@@ -22,6 +20,7 @@
     "@vitejs/plugin-react": "^5.0.4",
     "clsx": "^2.1.1",
     "d3": "^7.9.0",
+    "dotenv": "^17.2.3",
     "express": "^4.21.2",
     "firebase": "^12.11.0",
     "katex": "^0.16.40",
@@ -46,6 +45,7 @@
     "autoprefixer": "^10.4.21",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
-    "typescript": "~5.8.2"
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0"
   }
 }

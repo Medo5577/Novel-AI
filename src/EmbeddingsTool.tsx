@@ -23,8 +23,8 @@ import {
   generateEmbeddings, 
   semanticSearch,
   cosineSimilarity 
-} from '../services/embeddingsService';
-import { cn } from '../utils';
+} from './embeddingsService';
+import { cn } from './utils';
 
 export function EmbeddingsTool() {
   const [selectedModel, setSelectedModel] = useState(DEFAULT_EMBEDDING_MODEL);

@@ -1,9 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Mic, MicOff, X, Volume2, VolumeX, Loader2, Sparkles, Brain, User, Bot } from 'lucide-react';
-import { getGemini } from '../services/geminiService';
+import { getGemini } from './geminiService';
 import { LiveServerMessage, Modality } from "@google/genai";
-import { cn } from '../utils';
+import { cn } from './utils';
 
 interface LiveVoiceChatProps {
   isOpen: boolean;
@@ -46,17 +46,32 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
         setIsSpeaking(true);
         const chunk = audioQueueRef.current.shift()!;
         
-        const buffer = audioContextRef.current!.createBuffer(1, chunk.length, 16000);
-        const channelData = buffer.getChannelData(0);
-        for (let i = 0; i < chunk.length; i++) {
-          channelData[i] = chunk[i] / 32768.0;
-        }
+        try {
+          const buffer = audioContextRef.current!.createBuffer(1, chunk.length, 16000);
+          const channelData = buffer.getChannelData(0);
+          for (let i = 0; i < chunk.length; i++) {
+            channelData[i] = chunk[i] / 32768.0;
+          }
 
-        const source = audioContextRef.current!.createBufferSource();
-        source.buffer = buffer;
-        source.connect(audioContextRef.current!.destination);
-        source.onended = playNextChunk;
-        source.start();
+          const source = audioContextRef.current!.createBufferSource();
+          source.buffer = buffer;
+          
+          // Use a small gain node to prevent clipping and smooth transitions
+          const gainNode = audioContextRef.current!.createGain();
+          gainNode.gain.setValueAtTime(1, audioContextRef.current!.currentTime);
+          
+          source.connect(gainNode);
+          gainNode.connect(audioContextRef.current!.destination);
+          
+          source.onended = () => {
+            playNextChunk();
+          };
+          
+          source.start(0);
+        } catch (e) {
+          console.error("Playback error:", e);
+          playNextChunk();
+        }
       };
 
       // Connect to Live API
@@ -65,9 +80,9 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } },
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } },
           },
-          systemInstruction: "أنت Novel، مساعد صوتي ذكي وودود. تحدث باللغة العربية بطلاقة. كن موجزاً وواضحاً في ردودك. ساعد المستخدم في أي شيء يطلبه.",
+          systemInstruction: "أنت Novel، مساعدة صوتية ذكية وودودة جداً. تحدثي باللغة العربية بطلاقة ونبرة صوت إنسانية دافئة. كوني موجزة وواضحة في ردودك، واستخدمي تعبيرات بشرية طبيعية. ساعدي المستخدم في أي شيء يطلبه.",
         },
         callbacks: {
           onopen: () => {

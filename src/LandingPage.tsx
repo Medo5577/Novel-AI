@@ -1,7 +1,7 @@
 import React from 'react';
 import { motion } from 'motion/react';
 import { Sparkles, Zap, Palette, Code, Shield, ArrowRight, Globe, BarChart3, FileText, GraduationCap, Briefcase, Mail, Lock, User as UserIcon } from 'lucide-react';
-import { cn } from '../utils';
+import { cn } from './utils';
 
 interface LandingPageProps {
   onStart: () => void;
