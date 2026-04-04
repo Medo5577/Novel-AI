@@ -1,4 +1,4 @@
-import { db, auth } from './firebase';
+import { db, auth, storage } from './firebase';
 import { 
   collection, 
   addDoc, 
@@ -12,6 +12,7 @@ import {
   Timestamp,
   serverTimestamp
 } from 'firebase/firestore';
+import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 import { Message } from './geminiService';
 
 enum OperationType {
@@ -65,6 +66,13 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
+const uploadBase64ToStorage = async (userId: string, base64Data: string, mimeType: string): Promise<string> => {
+  const fileId = Date.now().toString() + Math.random().toString(36).substring(7);
+  const storageRef = ref(storage, `users/${userId}/attachments/${fileId}`);
+  await uploadString(storageRef, base64Data, 'base64', { contentType: mimeType });
+  return await getDownloadURL(storageRef);
+};
+
 export interface ChatSession {
   id: string;
   userId: string;
@@ -75,11 +83,34 @@ export interface ChatSession {
 }
 
 export const saveChat = async (userId: string, messages: Message[], chatId?: string, title?: string, summary?: string): Promise<string> => {
+  // Process messages to upload large base64 data to Storage
+  const processedMessages = await Promise.all(messages.map(async (msg) => {
+    const processedParts = await Promise.all(msg.parts.map(async (part) => {
+      // If it has inlineData and it's large (> 100KB), upload to storage
+      if (part.inlineData && part.inlineData.data.length > 100000) {
+        try {
+          const fileUrl = await uploadBase64ToStorage(userId, part.inlineData.data, part.inlineData.mimeType);
+          return {
+            ...part,
+            inlineData: undefined, // Remove large base64
+            fileUrl,
+            mimeType: part.inlineData.mimeType
+          };
+        } catch (e) {
+          console.error("Failed to upload to storage:", e);
+          return part;
+        }
+      }
+      return part;
+    }));
+    return { ...msg, parts: processedParts };
+  }));
+
   if (chatId) {
     const chatRef = doc(db, 'chats', chatId);
     try {
       await updateDoc(chatRef, {
-        messages,
+        messages: processedMessages,
         updatedAt: serverTimestamp(),
         title: title || messages[0]?.parts[0].text?.slice(0, 30) || 'Untitled Chat',
         summary: summary || ''
@@ -94,7 +125,7 @@ export const saveChat = async (userId: string, messages: Message[], chatId?: str
     try {
       const newChat = await addDoc(chatRef, {
         userId,
-        messages,
+        messages: processedMessages,
         title: title || messages[0]?.parts[0].text?.slice(0, 30) || 'Untitled Chat',
         summary: summary || '',
         updatedAt: serverTimestamp(),

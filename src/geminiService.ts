@@ -25,7 +25,12 @@ export interface Artifact {
 
 export interface Message {
   role: "user" | "model";
-  parts: { text?: string; inlineData?: { mimeType: string; data: string } }[];
+  parts: { 
+    text?: string; 
+    inlineData?: { mimeType: string; data: string };
+    fileUrl?: string;
+    mimeType?: string;
+  }[];
   timestamp: number;
   type?: "text" | "image" | "audio";
   isGroundingUsed?: boolean;

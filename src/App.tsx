@@ -1542,24 +1542,24 @@ function NovelApp() {
                             </div>
                           )}
                           
-                          {part.inlineData && (
+                          {(part.inlineData || part.fileUrl) && (
                             <motion.div 
                               initial={{ opacity: 0, scale: 0.9 }}
                               animate={{ opacity: 1, scale: 1 }}
                               className="mt-4 rounded-xl overflow-hidden border border-white/10 shadow-2xl"
                             >
-                              {part.inlineData.mimeType.startsWith('image/') ? (
+                              {(part.inlineData?.mimeType.startsWith('image/') || part.mimeType?.startsWith('image/')) ? (
                                 <img 
-                                  src={`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`} 
+                                  src={part.fileUrl || `data:${part.inlineData?.mimeType};base64,${part.inlineData?.data}`} 
                                   alt="Attachment" 
                                   className="max-w-full h-auto"
                                   referrerPolicy="no-referrer"
                                 />
-                              ) : part.inlineData.mimeType.startsWith('audio/') ? (
+                              ) : (part.inlineData?.mimeType.startsWith('audio/') || part.mimeType?.startsWith('audio/')) ? (
                                 <div className="p-4 bg-zinc-900 border-t border-white/5">
                                   <audio 
                                     controls 
-                                    src={`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`} 
+                                    src={part.fileUrl || `data:${part.inlineData?.mimeType};base64,${part.inlineData?.data}`} 
                                     className="w-full"
                                   />
                                 </div>
@@ -1599,10 +1599,10 @@ function NovelApp() {
                         </motion.div>
                       )}
 
-                      {msg.type === 'image' && msg.parts.some(p => p.inlineData) && (
+                      {msg.type === 'image' && msg.parts.some(p => p.inlineData || p.fileUrl) && (
                         <div className="p-3 bg-zinc-900/50 border-t border-white/5 flex justify-end mt-4 rounded-b-xl">
                           <a 
-                            href={`data:${msg.parts.find(p => p.inlineData)?.inlineData?.mimeType};base64,${msg.parts.find(p => p.inlineData)?.inlineData?.data}`}
+                            href={msg.parts.find(p => p.fileUrl)?.fileUrl || `data:${msg.parts.find(p => p.inlineData)?.inlineData?.mimeType};base64,${msg.parts.find(p => p.inlineData)?.inlineData?.data}`}
                             download="nova-generated.png"
                             className="p-2 hover:bg-white/5 rounded-lg text-zinc-400 hover:text-white transition-colors flex items-center gap-2 text-xs"
                           >
