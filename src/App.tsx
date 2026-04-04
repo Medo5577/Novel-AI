@@ -48,7 +48,7 @@ import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { motion, AnimatePresence } from 'motion/react';
-import { streamChat, generateImage, textToSpeech, analyzeConversation, Message, AppMode, parseArtifacts, MODE_PROMPTS, generateContextualSuggestions, generateChatSummary } from './geminiService';
+import { streamChat, generateImage, generateMusic, textToSpeech, analyzeConversation, Message, AppMode, parseArtifacts, MODE_PROMPTS, generateContextualSuggestions, generateChatSummary } from './geminiService';
 import { cn } from './utils';
 import { InteractiveTable } from './InteractiveTable';
 import { CVStudio } from './CVStudio';
@@ -366,7 +366,7 @@ function NovelApp() {
   const [tasks, setTasks] = useState<any[]>([]);
   const [taskLogs, setTaskLogs] = useState<any[]>([]);
   const [isLiveVoiceOpen, setIsLiveVoiceOpen] = useState(false);
-  const [typingSoundEnabled, setTypingSoundEnabled] = useState(true);
+  const [typingSoundEnabled, setTypingSoundEnabled] = useState(false);
   const [showPersonaBuilder, setShowPersonaBuilder] = useState(false);
   const [customPersona, setCustomPersona] = useState<any>(null);
   const [newTask, setNewTask] = useState({ task: '', time: '' });
@@ -545,29 +545,18 @@ function NovelApp() {
       }
     }
 
-    const isImageRequest = /generate image|create image|draw|صورة|ارسم/i.test(input);
     let fullResponse = '';
 
     try {
-      if (isImageRequest) {
-        const imageUrl = await generateImage(input);
-        const modelMessage: Message = {
-          role: 'model',
-          parts: [{ text: language === 'ar' ? `تم إنشاء صورة لـ: ${input}` : `Generated image for: ${input}` }, { inlineData: { mimeType: 'image/png', data: imageUrl.split(',')[1] } }],
-          timestamp: Date.now(),
-          type: 'image'
-        };
-        setMessages(prev => [...prev, modelMessage]);
-      } else {
-        const modelMessage: Message = {
-          role: 'model',
-          parts: [{ text: '' }],
-          timestamp: Date.now(),
-        };
-        
-        setMessages(prev => [...prev, modelMessage]);
+      const modelMessage: Message = {
+        role: 'model',
+        parts: [{ text: '' }],
+        timestamp: Date.now(),
+      };
+      
+      setMessages(prev => [...prev, modelMessage]);
 
-        // Use OpenRouter for both paid and free models
+      // Use OpenRouter for both paid and free models
         const useOpenRouter = (subscription && subscription.status === 'active' && subscription.selectedModels.length > 0) || !subscription;
         
         if (useOpenRouter) {
@@ -604,11 +593,88 @@ function NovelApp() {
             });
           }
           
+          // Handle image generation if requested by the model
+          const { cleanText, imagePrompts, musicPrompts, voicePrompts } = parseArtifacts(fullResponse);
+          const finalParts: any[] = [{ text: cleanText }];
+          
+          if (imagePrompts.length > 0) {
+            for (const prompt of imagePrompts) {
+              try {
+                const imageUrl = await generateImage(prompt);
+                const inlineData = { mimeType: 'image/png', data: imageUrl.split(',')[1] };
+                finalParts.push({ inlineData });
+                setMessages(prev => {
+                  const newMessages = [...prev];
+                  const lastMsg = newMessages[newMessages.length - 1];
+                  if (lastMsg.role === 'model') {
+                    lastMsg.parts.push({ inlineData });
+                  }
+                  return newMessages;
+                });
+              } catch (e) {
+                console.error("Failed to generate image from prompt:", e);
+              }
+            }
+          }
+
+          if (musicPrompts.length > 0) {
+            for (const { prompt, isPro } of musicPrompts) {
+              try {
+                const { audioBase64, mimeType, lyrics } = await generateMusic(prompt, isPro);
+                const inlineData = { mimeType, data: audioBase64 };
+                finalParts.push({ inlineData });
+                if (lyrics) {
+                  finalParts.push({ text: `\n\n**الكلمات:**\n${lyrics}` });
+                }
+                setMessages(prev => {
+                  const newMessages = [...prev];
+                  const lastMsg = newMessages[newMessages.length - 1];
+                  if (lastMsg.role === 'model') {
+                    lastMsg.parts.push({ inlineData });
+                    if (lyrics) {
+                      lastMsg.parts.push({ text: `\n\n**الكلمات:**\n${lyrics}` });
+                    }
+                  }
+                  return newMessages;
+                });
+              } catch (e) {
+                console.error("Failed to generate music from prompt:", e);
+              }
+            }
+          }
+
+          if (voicePrompts.length > 0) {
+            for (const voice of voicePrompts) {
+              try {
+                const utterance = new SpeechSynthesisUtterance(voice.text);
+                utterance.lang = voice.lang || (language === 'ar' ? 'ar-SA' : 'en-US');
+                if (voice.pitch !== undefined) utterance.pitch = voice.pitch;
+                if (voice.rate !== undefined) utterance.rate = voice.rate;
+                
+                window.speechSynthesis.speak(utterance);
+                
+                const voiceText = `\n\n*(تم تشغيل صوت: "${voice.text}")*`;
+                finalParts.push({ text: voiceText });
+                
+                setMessages(prev => {
+                  const newMessages = [...prev];
+                  const lastMsg = newMessages[newMessages.length - 1];
+                  if (lastMsg.role === 'model') {
+                    lastMsg.parts.push({ text: voiceText });
+                  }
+                  return newMessages;
+                });
+              } catch (e) {
+                console.error("Failed to play voice prompt:", e);
+              }
+            }
+          }
+          
           // Save to history after stream completes
           if (user) {
             const finalMessages: Message[] = [...messages, userMessage, {
               role: 'model',
-              parts: [{ text: fullResponse }],
+              parts: finalParts,
               timestamp: Date.now()
             }];
             await saveToHistory(finalMessages);
@@ -625,9 +691,17 @@ function NovelApp() {
             profile: userProfile
           });
           
+          let groundingUrls: string[] | undefined;
+          
           for await (const chunk of stream) {
             fullResponse += chunk.text;
             const { cleanText, artifacts } = parseArtifacts(fullResponse);
+            
+            if (chunk.groundingMetadata?.groundingChunks) {
+              groundingUrls = chunk.groundingMetadata.groundingChunks
+                .map((c: any) => c.web?.uri)
+                .filter(Boolean);
+            }
             
             setMessages(prev => {
               const newMessages = [...prev];
@@ -635,28 +709,104 @@ function NovelApp() {
               if (lastMsg.role === 'model') {
                 lastMsg.parts[0].text = cleanText;
                 lastMsg.artifacts = artifacts;
-                if (chunk.groundingMetadata?.groundingChunks) {
+                if (groundingUrls) {
                   lastMsg.isGroundingUsed = true;
-                  lastMsg.groundingUrls = chunk.groundingMetadata.groundingChunks
-                    .map((c: any) => c.web?.uri)
-                    .filter(Boolean);
+                  lastMsg.groundingUrls = groundingUrls;
                 }
               }
               return newMessages;
             });
           }
 
+          // Handle image generation if requested by the model
+          const { cleanText, imagePrompts, musicPrompts, voicePrompts } = parseArtifacts(fullResponse);
+          const finalParts: any[] = [{ text: cleanText }];
+          
+          if (imagePrompts.length > 0) {
+            for (const prompt of imagePrompts) {
+              try {
+                const imageUrl = await generateImage(prompt);
+                const inlineData = { mimeType: 'image/png', data: imageUrl.split(',')[1] };
+                finalParts.push({ inlineData });
+                setMessages(prev => {
+                  const newMessages = [...prev];
+                  const lastMsg = newMessages[newMessages.length - 1];
+                  if (lastMsg.role === 'model') {
+                    lastMsg.parts.push({ inlineData });
+                  }
+                  return newMessages;
+                });
+              } catch (e) {
+                console.error("Failed to generate image from prompt:", e);
+              }
+            }
+          }
+
+          if (musicPrompts.length > 0) {
+            for (const { prompt, isPro } of musicPrompts) {
+              try {
+                const { audioBase64, mimeType, lyrics } = await generateMusic(prompt, isPro);
+                const inlineData = { mimeType, data: audioBase64 };
+                finalParts.push({ inlineData });
+                if (lyrics) {
+                  finalParts.push({ text: `\n\n**الكلمات:**\n${lyrics}` });
+                }
+                setMessages(prev => {
+                  const newMessages = [...prev];
+                  const lastMsg = newMessages[newMessages.length - 1];
+                  if (lastMsg.role === 'model') {
+                    lastMsg.parts.push({ inlineData });
+                    if (lyrics) {
+                      lastMsg.parts.push({ text: `\n\n**الكلمات:**\n${lyrics}` });
+                    }
+                  }
+                  return newMessages;
+                });
+              } catch (e) {
+                console.error("Failed to generate music from prompt:", e);
+              }
+            }
+          }
+
+          if (voicePrompts.length > 0) {
+            for (const voice of voicePrompts) {
+              try {
+                const utterance = new SpeechSynthesisUtterance(voice.text);
+                utterance.lang = voice.lang || (language === 'ar' ? 'ar-SA' : 'en-US');
+                if (voice.pitch !== undefined) utterance.pitch = voice.pitch;
+                if (voice.rate !== undefined) utterance.rate = voice.rate;
+                
+                window.speechSynthesis.speak(utterance);
+                
+                const voiceText = `\n\n*(تم تشغيل صوت: "${voice.text}")*`;
+                finalParts.push({ text: voiceText });
+                
+                setMessages(prev => {
+                  const newMessages = [...prev];
+                  const lastMsg = newMessages[newMessages.length - 1];
+                  if (lastMsg.role === 'model') {
+                    lastMsg.parts.push({ text: voiceText });
+                  }
+                  return newMessages;
+                });
+              } catch (e) {
+                console.error("Failed to play voice prompt:", e);
+              }
+            }
+          }
+
           // Save to history after stream completes
           if (user) {
             const finalMessages: Message[] = [...messages, userMessage, {
               role: 'model',
-              parts: [{ text: fullResponse }],
-              timestamp: Date.now()
+              parts: finalParts,
+              timestamp: Date.now(),
+              isGroundingUsed: !!groundingUrls,
+              groundingUrls
             }];
             await saveToHistory(finalMessages);
           }
         }
-      }
     } catch (error) {
       console.error(error);
       setMessages(prev => [...prev, {
@@ -674,24 +824,28 @@ function NovelApp() {
 
   const handleSpeech = async (text: string, index: number) => {
     if (isSpeaking === index) {
-      audioRef.current?.pause();
+      window.speechSynthesis.cancel();
       setIsSpeaking(null);
       return;
     }
 
     try {
+      window.speechSynthesis.cancel(); // Stop any ongoing speech
       setIsSpeaking(index);
-      const audioUrl = await textToSpeech(text);
-      if (audioRef.current) {
-        audioRef.current.src = audioUrl;
-        audioRef.current.play();
-        audioRef.current.onended = () => setIsSpeaking(null);
-      } else {
-        const audio = new Audio(audioUrl);
-        audioRef.current = audio;
-        audio.play();
-        audio.onended = () => setIsSpeaking(null);
-      }
+      
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = language === 'ar' ? 'ar-SA' : 'en-US';
+      
+      utterance.onend = () => {
+        setIsSpeaking(null);
+      };
+      
+      utterance.onerror = (e) => {
+        console.error("Speech synthesis error:", e);
+        setIsSpeaking(null);
+      };
+
+      window.speechSynthesis.speak(utterance);
     } catch (error) {
       console.error("Speech error:", error);
       setIsSpeaking(null);
@@ -1401,6 +1555,14 @@ function NovelApp() {
                                   className="max-w-full h-auto"
                                   referrerPolicy="no-referrer"
                                 />
+                              ) : part.inlineData.mimeType.startsWith('audio/') ? (
+                                <div className="p-4 bg-zinc-900 border-t border-white/5">
+                                  <audio 
+                                    controls 
+                                    src={`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`} 
+                                    className="w-full"
+                                  />
+                                </div>
                               ) : (
                                 <div className="p-4 bg-zinc-900 flex items-center gap-3">
                                   <FileText className="w-6 h-6 text-emerald-500" />

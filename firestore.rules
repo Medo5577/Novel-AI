@@ -112,13 +112,14 @@ service cloud.firestore {
     }
 
     function isValidChat(data) {
-      let allowedFields = ['userId', 'title', 'messages', 'updatedAt', 'createdAt'];
+      let allowedFields = ['userId', 'title', 'messages', 'updatedAt', 'createdAt', 'summary'];
       return hasOnlyAllowedFields(allowedFields) &&
              data.userId is string && data.userId.size() > 0 &&
              data.title is string && data.title.size() < 200 &&
              data.messages is list && data.messages.size() <= 500 &&
              data.updatedAt is timestamp &&
-             data.createdAt is timestamp;
+             data.createdAt is timestamp &&
+             (!('summary' in data) || (data.summary is string && data.summary.size() < 2000));
     }
 
     function isValidSubscription(data) {

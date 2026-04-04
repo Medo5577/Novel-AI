@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Mic, MicOff, X, Volume2, VolumeX, Loader2, Sparkles, Brain, User, Bot } from 'lucide-react';
+import { Mic, MicOff, X, Volume2, VolumeX, Loader2, Sparkles, Brain, User, Bot, Settings2 } from 'lucide-react';
 import { getGemini } from './geminiService';
 import { LiveServerMessage, Modality } from "@google/genai";
 import { cn } from './utils';
@@ -10,6 +10,8 @@ interface LiveVoiceChatProps {
   onClose: () => void;
 }
 
+type VoiceName = 'Puck' | 'Charon' | 'Kore' | 'Fenrir' | 'Zephyr';
+
 export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose }) => {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
@@ -17,13 +19,15 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isUserSpeaking, setIsUserSpeaking] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedVoice, setSelectedVoice] = useState<VoiceName>('Kore');
+  const [showSettings, setShowSettings] = useState(false);
 
   const sessionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const audioWorkletRef = useRef<AudioWorkletNode | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
-  const audioQueueRef = useRef<Int16Array[]>([]);
+  const nextPlayTimeRef = useRef<number>(0);
   const isPlayingRef = useRef(false);
+  const processorRef = useRef<ScriptProcessorNode | null>(null);
 
   const startSession = async () => {
     try {
@@ -33,54 +37,48 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
 
       // Initialize Audio Context
       audioContextRef.current = new AudioContext({ sampleRate: 16000 });
+      nextPlayTimeRef.current = 0;
       
       // Setup Audio Output
-      const playNextChunk = async () => {
-        if (audioQueueRef.current.length === 0) {
-          isPlayingRef.current = false;
-          setIsSpeaking(false);
-          return;
-        }
-
+      const scheduleAudioChunk = (int16Data: Int16Array) => {
+        if (!audioContextRef.current) return;
+        
         isPlayingRef.current = true;
         setIsSpeaking(true);
-        const chunk = audioQueueRef.current.shift()!;
         
-        try {
-          const buffer = audioContextRef.current!.createBuffer(1, chunk.length, 16000);
-          const channelData = buffer.getChannelData(0);
-          for (let i = 0; i < chunk.length; i++) {
-            channelData[i] = chunk[i] / 32768.0;
-          }
-
-          const source = audioContextRef.current!.createBufferSource();
-          source.buffer = buffer;
-          
-          // Use a small gain node to prevent clipping and smooth transitions
-          const gainNode = audioContextRef.current!.createGain();
-          gainNode.gain.setValueAtTime(1, audioContextRef.current!.currentTime);
-          
-          source.connect(gainNode);
-          gainNode.connect(audioContextRef.current!.destination);
-          
-          source.onended = () => {
-            playNextChunk();
-          };
-          
-          source.start(0);
-        } catch (e) {
-          console.error("Playback error:", e);
-          playNextChunk();
+        const buffer = audioContextRef.current.createBuffer(1, int16Data.length, 16000);
+        const channelData = buffer.getChannelData(0);
+        for (let i = 0; i < int16Data.length; i++) {
+          channelData[i] = int16Data[i] / 32768.0;
         }
+
+        const source = audioContextRef.current.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContextRef.current.destination);
+        
+        const currentTime = audioContextRef.current.currentTime;
+        if (nextPlayTimeRef.current < currentTime) {
+          nextPlayTimeRef.current = currentTime;
+        }
+        
+        source.start(nextPlayTimeRef.current);
+        nextPlayTimeRef.current += buffer.duration;
+        
+        source.onended = () => {
+          if (audioContextRef.current && audioContextRef.current.currentTime >= nextPlayTimeRef.current) {
+            isPlayingRef.current = false;
+            setIsSpeaking(false);
+          }
+        };
       };
 
       // Connect to Live API
-      sessionRef.current = await ai.live.connect({
-        model: "gemini-2.5-flash-native-audio-preview-12-2025",
+      const sessionPromise = ai.live.connect({
+        model: "gemini-3.1-flash-live-preview",
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
-            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Kore" } },
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: selectedVoice } },
           },
           systemInstruction: "أنت Novel، مساعدة صوتية ذكية وودودة جداً. تحدثي باللغة العربية بطلاقة ونبرة صوت إنسانية دافئة. كوني موجزة وواضحة في ردودك، واستخدمي تعبيرات بشرية طبيعية. ساعدي المستخدم في أي شيء يطلبه.",
         },
@@ -94,20 +92,19 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
             if (message.serverContent?.modelTurn?.parts) {
               for (const part of message.serverContent.modelTurn.parts) {
                 if (part.inlineData?.data) {
-                  // Decode base64 audio and add to queue
+                  // Decode base64 audio and schedule
                   const binaryString = atob(part.inlineData.data);
                   const bytes = new Uint8Array(binaryString.length);
                   for (let i = 0; i < binaryString.length; i++) {
                     bytes[i] = binaryString.charCodeAt(i);
                   }
                   const int16Data = new Int16Array(bytes.buffer);
-                  audioQueueRef.current.push(int16Data);
-                  if (!isPlayingRef.current) playNextChunk();
+                  scheduleAudioChunk(int16Data);
                 }
               }
             }
             if (message.serverContent?.interrupted) {
-              audioQueueRef.current = [];
+              nextPlayTimeRef.current = audioContextRef.current?.currentTime || 0;
               isPlayingRef.current = false;
               setIsSpeaking(false);
             }
@@ -122,6 +119,7 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
           }
         }
       });
+      sessionRef.current = sessionPromise;
 
     } catch (err) {
       console.error("Failed to start live session:", err);
@@ -137,6 +135,8 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
       
       // Simple processor to send audio chunks
       const processor = audioContextRef.current!.createScriptProcessor(4096, 1, 1);
+      processorRef.current = processor;
+      
       processor.onaudioprocess = (e) => {
         if (isMuted || !sessionRef.current) return;
         
@@ -150,29 +150,49 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
         const average = sum / inputData.length;
         setIsUserSpeaking(average > 0.01);
 
-        const int16Data = new Int16Array(inputData.length);
+        // Convert to Int16 PCM
+        const pcmData = new Int16Array(inputData.length);
         for (let i = 0; i < inputData.length; i++) {
-          int16Data[i] = Math.max(-1, Math.min(1, inputData[i])) * 0x7FFF;
+          pcmData[i] = Math.max(-1, Math.min(1, inputData[i])) * 32767;
         }
-        
-        const base64Data = btoa(String.fromCharCode(...new Uint8Array(int16Data.buffer)));
-        sessionRef.current.sendRealtimeInput({
-          audio: { data: base64Data, mimeType: 'audio/pcm;rate=16000' }
-        });
+
+        // Convert to base64
+        const buffer = new Uint8Array(pcmData.buffer);
+        let binary = '';
+        for (let i = 0; i < buffer.byteLength; i++) {
+          binary += String.fromCharCode(buffer[i]);
+        }
+        const base64Data = btoa(binary);
+
+        sessionRef.current.then((session: any) => {
+          session.sendRealtimeInput({
+            audio: { data: base64Data, mimeType: 'audio/pcm;rate=16000' }
+          });
+        }).catch(() => {});
       };
-      
+
       source.connect(processor);
       processor.connect(audioContextRef.current!.destination);
     } catch (err) {
-      console.error("Mic Error:", err);
-      setError("لا يمكن الوصول إلى الميكروفون.");
+      console.error("Mic error:", err);
+      setError("لا يمكن الوصول للميكروفون.");
     }
   };
 
   const stopSession = () => {
     if (sessionRef.current) {
-      sessionRef.current.close();
+      sessionRef.current.then((session: any) => {
+        try {
+          session.close();
+        } catch (e) {
+          console.warn("Error closing session:", e);
+        }
+      }).catch(() => {});
       sessionRef.current = null;
+    }
+    if (processorRef.current) {
+      processorRef.current.disconnect();
+      processorRef.current = null;
     }
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(t => t.stop());
@@ -186,7 +206,6 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
     setIsConnecting(false);
     setIsSpeaking(false);
     setIsUserSpeaking(false);
-    audioQueueRef.current = [];
     isPlayingRef.current = false;
   };
 
@@ -198,6 +217,24 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
     }
     return () => stopSession();
   }, [isOpen]);
+
+  // Restart session when voice changes if already connected
+  useEffect(() => {
+    if (isConnected && !isConnecting) {
+      stopSession();
+      setTimeout(() => {
+        startSession();
+      }, 500);
+    }
+  }, [selectedVoice]);
+
+  const voices: { id: VoiceName, name: string, type: string }[] = [
+    { id: 'Kore', name: 'كوري (Kore)', type: 'أنثوي هادئ' },
+    { id: 'Charon', name: 'كارون (Charon)', type: 'رجالي عميق' },
+    { id: 'Fenrir', name: 'فنرير (Fenrir)', type: 'رجالي قوي' },
+    { id: 'Puck', name: 'باك (Puck)', type: 'رجالي حيوي' },
+    { id: 'Zephyr', name: 'زيفير (Zephyr)', type: 'رجالي هادئ' },
+  ];
 
   return (
     <AnimatePresence>
@@ -222,9 +259,16 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
 
             <button 
               onClick={onClose}
-              className="absolute top-8 right-8 p-2 hover:bg-white/10 rounded-full text-zinc-400 transition-colors"
+              className="absolute top-8 left-8 p-2 hover:bg-white/10 rounded-full text-zinc-400 transition-colors"
             >
               <X className="w-6 h-6" />
+            </button>
+
+            <button 
+              onClick={() => setShowSettings(!showSettings)}
+              className="absolute top-8 right-8 p-2 hover:bg-white/10 rounded-full text-zinc-400 transition-colors"
+            >
+              <Settings2 className="w-6 h-6" />
             </button>
 
             <div className="relative mb-12">
@@ -262,9 +306,39 @@ export const LiveVoiceChat: React.FC<LiveVoiceChatProps> = ({ isOpen, onClose })
               {isConnecting ? "جاري الاتصال..." : isConnected ? "Novel تستمع إليك" : "غير متصل"}
             </h2>
             
-            <p className="text-zinc-400 mb-12 max-w-xs">
+            <p className="text-zinc-400 mb-8 max-w-xs h-6">
               {error || (isConnected ? "Novel تستمع إليك الآن..." : "تأكد من اتصالك بالإنترنت وصلاحيات الميكروفون.")}
             </p>
+
+            <AnimatePresence>
+              {showSettings && (
+                <motion.div 
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                  className="w-full mb-8 bg-black/20 p-4 rounded-2xl border border-white/5"
+                >
+                  <h3 className="text-sm font-medium text-zinc-300 mb-3 text-right">اختر شخصية الصوت:</h3>
+                  <div className="grid grid-cols-2 gap-2">
+                    {voices.map(v => (
+                      <button
+                        key={v.id}
+                        onClick={() => setSelectedVoice(v.id as VoiceName)}
+                        className={cn(
+                          "text-xs p-2 rounded-xl border text-right transition-colors flex flex-col",
+                          selectedVoice === v.id 
+                            ? "border-emerald-500 bg-emerald-500/10 text-emerald-400" 
+                            : "border-white/10 text-zinc-400 hover:bg-white/5"
+                        )}
+                      >
+                        <span className="font-bold">{v.name}</span>
+                        <span className="text-[10px] opacity-70">{v.type}</span>
+                      </button>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Enhanced Sound Wave Visualization */}
             <div className="flex items-end justify-center gap-1.5 h-16 mb-12">

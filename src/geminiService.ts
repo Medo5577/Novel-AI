@@ -59,15 +59,85 @@ When generating a quiz in Arabic, ensure the tone is challenging and the questio
 `;
 
 export const MODE_PROMPTS: Record<AppMode, string> = {
-  General: "You are Novel AI, a helpful and highly intelligent assistant. You provide concise, accurate, and professional answers. You can generate images if asked. Use Google Search grounding when needed for real-time information. Use LaTeX for math/chemistry equations ($ for inline, $$ for blocks)." + ARTIFACT_PROMPT,
+  General: "You are Novel AI, a helpful and highly intelligent assistant. You provide concise, accurate, and professional answers. If the user asks you to generate, draw, or create an image/picture, you MUST respond with exactly this format: [GENERATE_IMAGE: <detailed image prompt in English>]. If the user asks to generate music, a song, or audio, respond with exactly: [GENERATE_MUSIC: <detailed prompt in English>] for a short clip, or [GENERATE_MUSIC_PRO: <detailed prompt>] for a full song. If the user asks to generate voice/speech with specific performance/structure, respond with exactly: [GENERATE_VOICE: {\"text\": \"<text to speak>\", \"lang\": \"ar-SA\", \"pitch\": 1.0, \"rate\": 1.0}]. Do not use artifacts for images or music. Use Google Search grounding when needed for real-time information. Use LaTeX for math/chemistry equations ($ for inline, $$ for blocks)." + ARTIFACT_PROMPT,
   Study: "You are Novel Study Mode. Your goal is to help the user learn. Break down complex topics into simple steps, provide examples, ask follow-up questions to test understanding, and create study plans. Use a supportive and educational tone. Create interactive, strict, and challenging quizzes when appropriate using the [ARTIFACT_START] format. For quizzes, ensure they are 'Strict' (صارمة) with timers and lives. Use LaTeX for all mathematical and chemical equations." + ARTIFACT_PROMPT,
   Professional: "You are Novel Professional Mode. You specialize in creating high-quality CVs, professional reports, cover letters, and business documents. Use formal language, professional formatting, and focus on impact and clarity. When asked for a CV or resume, ALWAYS use the [ARTIFACT_START] format with type 'cv'." + ARTIFACT_PROMPT,
   Data: "You are Novel Data & Tables Mode. You specialize in organizing information into structured tables, analyzing Excel/CSV data, and creating reports based on data. When presenting data or requested for a chart, ALWAYS use the [ARTIFACT_START] format with type 'table' or 'chart'." + ARTIFACT_PROMPT
 };
 
-export function parseArtifacts(text: string): { cleanText: string; artifacts: Artifact[] } {
+export interface VoicePrompt {
+  text: string;
+  lang?: string;
+  pitch?: number;
+  rate?: number;
+}
+
+export function parseArtifacts(text: string): { cleanText: string; artifacts: Artifact[]; imagePrompts: string[]; musicPrompts: { prompt: string, isPro: boolean }[]; voicePrompts: VoicePrompt[] } {
   const artifacts: Artifact[] = [];
+  const imagePrompts: string[] = [];
+  const musicPrompts: { prompt: string, isPro: boolean }[] = [];
+  const voicePrompts: VoicePrompt[] = [];
   let cleanText = text;
+  
+  // Extract image generation prompts
+  const imageRegex = /\[GENERATE_IMAGE:\s*(.*?)\]/g;
+  let imgMatch;
+  while ((imgMatch = imageRegex.exec(text)) !== null) {
+    if (imgMatch[1].trim()) {
+      imagePrompts.push(imgMatch[1].trim());
+    }
+    cleanText = cleanText.replace(imgMatch[0], '');
+  }
+
+  // Extract music generation prompts
+  const musicRegex = /\[GENERATE_MUSIC:\s*(.*?)\]/g;
+  let musicMatch;
+  while ((musicMatch = musicRegex.exec(text)) !== null) {
+    if (musicMatch[1].trim()) {
+      musicPrompts.push({ prompt: musicMatch[1].trim(), isPro: false });
+    }
+    cleanText = cleanText.replace(musicMatch[0], '');
+  }
+
+  const musicProRegex = /\[GENERATE_MUSIC_PRO:\s*(.*?)\]/g;
+  let musicProMatch;
+  while ((musicProMatch = musicProRegex.exec(text)) !== null) {
+    if (musicProMatch[1].trim()) {
+      musicPrompts.push({ prompt: musicProMatch[1].trim(), isPro: true });
+    }
+    cleanText = cleanText.replace(musicProMatch[0], '');
+  }
+
+  // Extract voice generation prompts
+  const voiceRegex = /\[GENERATE_VOICE:\s*({.*?})\]/g;
+  let voiceMatch;
+  while ((voiceMatch = voiceRegex.exec(text)) !== null) {
+    try {
+      const voiceData = JSON.parse(voiceMatch[1]);
+      if (voiceData && voiceData.text) {
+        voicePrompts.push(voiceData);
+      }
+    } catch (e) {
+      console.warn("Failed to parse voice prompt JSON:", e);
+    }
+    cleanText = cleanText.replace(voiceMatch[0], '');
+  }
+
+  // Also check for unclosed image tags to hide them during streaming
+  const unclosedImgMatch = cleanText.match(/\[GENERATE_IMAGE:[\s\S]*?$/);
+  if (unclosedImgMatch && !cleanText.includes(']', unclosedImgMatch.index)) {
+    cleanText = cleanText.replace(unclosedImgMatch[0], '*(جاري إنشاء الصورة...)*');
+  }
+
+  const unclosedMusicMatch = cleanText.match(/\[GENERATE_MUSIC:[\s\S]*?$/);
+  if (unclosedMusicMatch && !cleanText.includes(']', unclosedMusicMatch.index)) {
+    cleanText = cleanText.replace(unclosedMusicMatch[0], '*(جاري إنشاء المقطع الصوتي...)*');
+  }
+
+  const unclosedMusicProMatch = cleanText.match(/\[GENERATE_MUSIC_PRO:[\s\S]*?$/);
+  if (unclosedMusicProMatch && !cleanText.includes(']', unclosedMusicProMatch.index)) {
+    cleanText = cleanText.replace(unclosedMusicProMatch[0], '*(جاري إنشاء المقطع الصوتي الكامل...)*');
+  }
   
   // Improved regex to handle cases where the model might be slow or forget the end tag (though end tag is preferred)
   const regex = /\[ARTIFACT_START\]([\s\S]*?)\[ARTIFACT_END\]/g;
@@ -94,14 +164,14 @@ export function parseArtifacts(text: string): { cleanText: string; artifacts: Ar
   }
   
   // Also check for unclosed artifacts at the end of the text (for better streaming UX)
-  const unclosedMatch = text.match(/\[ARTIFACT_START\]([\s\S]*?)$/);
-  if (unclosedMatch && !text.includes('[ARTIFACT_END]', unclosedMatch.index)) {
+  const unclosedMatch = cleanText.match(/\[ARTIFACT_START\]([\s\S]*?)$/);
+  if (unclosedMatch && !cleanText.includes('[ARTIFACT_END]', unclosedMatch.index)) {
     // We don't add it to artifacts yet because it's incomplete, 
     // but we hide the raw tag from cleanText to keep the UI clean
     cleanText = cleanText.replace(unclosedMatch[0], '*(جاري إنشاء المحتوى التفاعلي...)*');
   }
   
-  return { cleanText: cleanText.trim(), artifacts };
+  return { cleanText: cleanText.trim(), artifacts, imagePrompts, musicPrompts, voicePrompts };
 }
 
 export async function generateChatSummary(messages: Message[], language: 'ar' | 'en'): Promise<string> {
@@ -237,28 +307,77 @@ export async function generateImage(prompt: string) {
   throw new Error("No image data returned from model");
 }
 
-export async function textToSpeech(text: string) {
-  const ai = getGemini();
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-preview-tts",
-    contents: [{ parts: [{ text }] }],
-    config: {
-      responseModalities: [Modality.AUDIO],
-      speechConfig: {
-        voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: 'Kore' },
-        },
-      },
+export async function generateMusic(prompt: string, isPro: boolean = false) {
+  const model = isPro ? "google/lyria-3-pro-preview" : "google/lyria-3-clip-preview";
+  
+  const response = await fetch("/api/chat/openrouter", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
     },
+    body: JSON.stringify({
+      model,
+      messages: [{ role: "user", content: prompt }],
+      stream: false,
+    }),
   });
 
-  const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-  if (base64Audio) {
-    console.log("[TTS] Audio generated successfully, length:", base64Audio.length);
-    return `data:audio/mpeg;base64,${base64Audio}`;
+  if (!response.ok) {
+    throw new Error("Failed to generate music via OpenRouter");
   }
-  console.error("[TTS] Failed to generate audio: No data in response");
-  throw new Error("Failed to generate audio");
+
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content || "";
+  
+  // OpenRouter might return the audio as a base64 string in the content, or as a markdown audio link, or in a specific audio field.
+  // We'll try to extract it from the content if it's base64, or check if there's an audio object.
+  let audioBase64 = "";
+  let mimeType = "audio/wav";
+  let lyrics = content;
+
+  if (data.choices?.[0]?.message?.audio) {
+    audioBase64 = data.choices[0].message.audio.data;
+    mimeType = "audio/wav"; // Or whatever it returns
+  } else if (content.includes("data:audio")) {
+    // Extract base64 from data URI
+    const match = content.match(/data:(audio\/[^;]+);base64,([^"'\s]+)/);
+    if (match) {
+      mimeType = match[1];
+      audioBase64 = match[2];
+      lyrics = content.replace(match[0], "");
+    }
+  } else {
+    // If it's just a raw base64 string
+    const base64Regex = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+    if (base64Regex.test(content.trim()) && content.trim().length > 100) {
+      audioBase64 = content.trim();
+      lyrics = "";
+    }
+  }
+
+  if (!audioBase64) {
+    console.warn("Could not extract audio from OpenRouter response:", data);
+    throw new Error("No audio data returned from OpenRouter");
+  }
+
+  return { audioBase64, mimeType, lyrics };
+}
+
+export async function textToSpeech(text: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!('speechSynthesis' in window)) {
+      reject(new Error("Speech synthesis is not supported in this browser."));
+      return;
+    }
+
+    // We don't return an audio URL for SpeechSynthesis, we just play it directly.
+    // However, the current App.tsx expects an audio URL.
+    // To bridge this, we can return a special protocol or handle it differently.
+    // Actually, it's better to just play it here and return a dummy URL, or change App.tsx.
+    // Let's change App.tsx to handle this better, but for now, we can just reject and say "Use native".
+    // Wait, let's just return a dummy URL and handle the actual speech in App.tsx, or handle it here.
+    reject(new Error("USE_NATIVE_TTS"));
+  });
 }
 
 export async function analyzeConversation(input: string, language: 'ar' | 'en') {

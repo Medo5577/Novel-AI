@@ -111,29 +111,44 @@ async function startServer() {
 
       console.log(`[AGENT] Proxying request to OpenRouter: ${model} (stream: ${stream})`);
 
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://novel-ai.com",
+          "X-Title": "Novel AI"
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream
+        })
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`OpenRouter API Error: ${response.status} ${errorText}`);
+      }
+
       if (stream) {
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
 
-        const response = await openai.chat.completions.create({
-          model,
-          messages,
-          stream: true,
-        });
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("No reader available");
 
-        for await (const chunk of response) {
-          res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+        const decoder = new TextDecoder();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          res.write(decoder.decode(value));
         }
-        res.write('data: [DONE]\n\n');
         res.end();
       } else {
-        const response = await openai.chat.completions.create({
-          model,
-          messages,
-          stream: false,
-        });
-        res.json(response);
+        const data = await response.json();
+        res.json(data);
       }
     } catch (error: any) {
       console.error("OpenRouter Proxy Error:", error.message);
