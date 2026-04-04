@@ -109,6 +109,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, { hasError: boole
 }
 
 function NovelApp() {
+  const appUrl = import.meta.env.VITE_APP_URL || window.location.origin;
   const [showLanding, setShowLanding] = useState(true);
   const [messages, setMessages] = useState<Message[]>([]);
   const [history, setHistory] = useState<{ id: string; title: string; summary?: string; messages: Message[] }[]>([]);
